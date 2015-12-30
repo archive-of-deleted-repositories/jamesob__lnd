@@ -1,7 +1,6 @@
 package lnwire
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
@@ -19,7 +18,7 @@ type FundingRequest struct {
 	//Should double-check the total funding later
 	MinTotalFundingAmount btcutil.Amount
 
-	//CLTV lock-time to use
+	//CLTV/CSV lock-time to use
 	LockTime uint32
 
 	//Who pays the fees
@@ -31,14 +30,13 @@ type FundingRequest struct {
 	RevocationHash   [20]byte
 	Pubkey           *btcec.PublicKey
 	DeliveryPkScript PkScript //*MUST* be either P2PKH or P2SH
-	//FIXME: Need a ChangePkScript PkScript for dual-funder CLTV?
+	ChangePkScript   PkScript //*MUST* be either P2PKH or P2SH
 
 	Inputs []*wire.TxIn
 }
 
 func (c *FundingRequest) Decode(r io.Reader, pver uint32) error {
 	//Channel Type (0/1)
-	//	default to 0 for CLTV-only
 	//Funding Amount (1/8)
 	//Channel Minimum Capacity (9/8)
 	//Revocation Hash (17/20)
@@ -47,7 +45,9 @@ func (c *FundingRequest) Decode(r io.Reader, pver uint32) error {
 	//Minimum Transaction Fee Per Kb (77/8)
 	//LockTime (85/4)
 	//FeePayer (89/1)
-	//DeliveryPkScript
+	//DeliveryPkScript (final delivery)
+	//	First byte length then pkscript
+	//ChangePkScript (change for extra from inputs)
 	//	First byte length then pkscript
 	//Inputs: Create the TxIns
 	//	First byte is number of inputs
@@ -63,12 +63,13 @@ func (c *FundingRequest) Decode(r io.Reader, pver uint32) error {
 		&c.LockTime,
 		&c.FeePayer,
 		&c.DeliveryPkScript,
+		&c.ChangePkScript,
 		&c.Inputs)
 	if err != nil {
 		return err
 	}
 
-	return c.Validate()
+	return nil
 }
 
 //Creates a new FundingRequest
@@ -89,6 +90,7 @@ func (c *FundingRequest) Encode(w io.Writer, pver uint32) error {
 	//LockTime
 	//FeePayer
 	//DeliveryPkScript
+	//ChangePkScript
 	//Inputs: Append the actual Txins
 	err := writeElements(w, false,
 		c.ChannelType,
@@ -101,6 +103,7 @@ func (c *FundingRequest) Encode(w io.Writer, pver uint32) error {
 		c.LockTime,
 		c.FeePayer,
 		c.DeliveryPkScript,
+		c.ChangePkScript,
 		c.Inputs)
 	if err != nil {
 		return err
@@ -114,13 +117,14 @@ func (c *FundingRequest) Command() uint32 {
 }
 
 func (c *FundingRequest) MaxPayloadLength(uint32) uint32 {
-	//90 (base size) + 26 (pkscript) + 1 (numTxes) + 127*36(127 inputs * sha256+idx)
-	//4690
-	return 4689
+	//90 (base size) + 26 (pkscript) + 26 (pkscript) + 1 (numTxes) + 127*36(127 inputs * sha256+idx)
+	return 4715
 }
 
 //Makes sure the struct data is valid (e.g. no negatives or invalid pkscripts)
 func (c *FundingRequest) Validate() error {
+	var err error
+
 	//No negative values
 	if c.FundingAmount < 0 {
 		return fmt.Errorf("FundingAmount cannot be negative")
@@ -137,28 +141,16 @@ func (c *FundingRequest) Validate() error {
 		return fmt.Errorf("MinTotalFundingAmount cannot be negative")
 	}
 
-	//PkScript is either P2SH or P2PKH
-	if len(c.DeliveryPkScript) == 25 {
-		//P2PKH
-		//Begins with OP_DUP OP_HASH160 PUSHDATA(20)
-		if !bytes.Equal(c.DeliveryPkScript[0:3], []byte{118, 169, 20}) &&
-			//Ends with OP_EQUALVERIFY OP_CHECKSIG
-			!bytes.Equal(c.DeliveryPkScript[23:25], []byte{136, 172}) {
-			//If it's not correct, return error
-			return fmt.Errorf("PkScript only allows P2SH or P2PKH")
-		}
-	} else if len(c.DeliveryPkScript) == 23 {
-		//P2SH
-		//Begins with OP_HASH160 PUSHDATA(20)
-		if !bytes.Equal(c.DeliveryPkScript[0:2], []byte{169, 20}) &&
-			//Ends with OP_EQUAL
-			!bytes.Equal(c.DeliveryPkScript[22:23], []byte{135}) {
-			//If it's not correct, return error
-			return fmt.Errorf("PkScript only allows P2SH or P2PKH")
-		}
-	} else {
-		//Length not 23 or 25
-		return fmt.Errorf("PkScript only allows P2SH or P2PKH")
+	//DeliveryPkScript is either P2SH or P2PKH
+	err = ValidatePkScript(c.DeliveryPkScript)
+	if err != nil {
+		return err
+	}
+
+	//ChangePkScript is either P2SH or P2PKH
+	err = ValidatePkScript(c.ChangePkScript)
+	if err != nil {
+		return err
 	}
 
 	//We're good!
