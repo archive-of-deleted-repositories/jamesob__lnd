@@ -7,46 +7,80 @@ package lnwire
 import (
 	"bytes"
 	"testing"
-
-	"github.com/BitfuryLightning/tools/rt"
-	"github.com/BitfuryLightning/tools/rt/graph"
 	"github.com/roasbeef/btcd/wire"
+	"reflect"
 )
 
+
+func samplePubKey(b byte) [33]byte {
+	var a [33]byte
+	for i:=0; i<33; i++ {
+		a[i] = b
+	}
+	return a
+}
+
+func sampleOutPoint(b byte) wire.OutPoint {
+	var w wire.OutPoint
+	for i:=0; i<len(w.Hash); i++ {
+		w.Hash[i] = b
+	}
+	w.Index = uint32(b)
+	return w
+}
+
+func genNeighborHelloMessage() *NeighborHelloMessage {
+	p1 := samplePubKey(1)
+	p2 := samplePubKey(2)
+	p3 := samplePubKey(3)
+	e1 := sampleOutPoint(4)
+	e2 := sampleOutPoint(5)
+
+	msg := NeighborHelloMessage{
+		Channels: []ChannelOperation{
+			{
+				NodePubKey1: p1,
+				NodePubKey2: p2,
+				ChannelId: &e1,
+				Capacity: 100000,
+				Weight: 1.0,
+				Operation: 0,
+			},
+			{
+				NodePubKey1: p2,
+				NodePubKey2: p3,
+				ChannelId: &e2,
+				Capacity: 210000,
+				Weight: 2.0,
+				Operation: 0,
+			},
+		},
+	}
+	return &msg
+}
+
 func TestNeighborHelloMessageEncodeDecode(t *testing.T) {
-	Id1 := graph.NewID(1)
-	Id2 := graph.NewID(2)
-	rt1 := rt.NewRoutingTable()
-	rt1.AddChannel(Id1, Id2, graph.NewEdgeID("1"), &rt.ChannelInfo{1, 1})
+	msg1 := genNeighborHelloMessage()
+
 	b := new(bytes.Buffer)
-	msg1 := NeighborHelloMessage{RT: rt1}
 	err := msg1.Encode(b, 0)
 	if err != nil {
 		t.Fatalf("Can't encode message ", err)
 	}
 	msg2 := new(NeighborHelloMessage)
 	err = msg2.Decode(b, 0)
-	if err != nil {
-		t.Fatalf("Can't decode message ", err)
-	}
-	if msg2.RT == nil {
-		t.Fatal("After decoding RT should not be nil")
-	}
-	if !msg2.RT.HasChannel(Id1, Id2, graph.NewEdgeID("1")) {
-		t.Errorf("msg2.RT.HasChannel(Id1, Id2) = false, want true")
-	}
-	if !msg2.RT.HasChannel(Id2, Id1, graph.NewEdgeID("1")) {
-		t.Errorf("msg2.RT.HasChannel(Id2, Id1) = false, want true")
+
+	// Assert equality of the two instances.
+	if !reflect.DeepEqual(msg1, msg2) {
+		t.Fatalf("encode/decode error messages don't match %v vs %v",
+			msg1, msg2)
 	}
 }
 
 func TestNeighborHelloMessageReadWrite(t *testing.T) {
-	Id1 := graph.NewID(1)
-	Id2 := graph.NewID(2)
-	rt1 := rt.NewRoutingTable()
-	rt1.AddChannel(Id1, Id2, graph.NewEdgeID("1"), &rt.ChannelInfo{1, 1})
+	msg1 := genNeighborHelloMessage()
+
 	b := new(bytes.Buffer)
-	msg1 := &NeighborHelloMessage{RT: rt1}
 	_, err := WriteMessage(b, msg1, 0, wire.SimNet)
 	if err != nil {
 		t.Fatalf("Can't write message %v", err)
@@ -55,17 +89,10 @@ func TestNeighborHelloMessageReadWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Can't read message %v", err)
 	}
-	msg2c, ok := msg2.(*NeighborHelloMessage)
-	if !ok {
-		t.Fatalf("Can't convert to *NeighborHelloMessage")
-	}
-	if msg2c.RT == nil {
-		t.Fatal("After decoding RT should not be nil")
-	}
-	if !msg2c.RT.HasChannel(Id1, Id2, graph.NewEdgeID("1")) {
-		t.Errorf("msg2.RT.HasChannel(Id1, Id2) = false, want true")
-	}
-	if !msg2c.RT.HasChannel(Id2, Id1, graph.NewEdgeID("1")) {
-		t.Errorf("msg2.RT.HasChannel(Id2, Id1) = false, want true")
+
+	// Assert equality of the two instances.
+	if !reflect.DeepEqual(msg1, msg2) {
+		t.Fatalf("encode/decode error messages don't match %v vs %v",
+			msg1, msg2)
 	}
 }
